@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "image-dataset-creator"
+version = "1.0.0"
+description = "CLI tool and Python library for building high-quality, legally-safe image datasets"
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.0",
+    "httpx>=0.25",
+    "Pillow>=10.0",
+    "opencv-python-headless>=4.8",
+    "imagehash>=4.3",
+    "tqdm>=4.65",
+    "rich>=13.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "keyring>=24.0",
+]
+
+[project.optional-dependencies]
+huggingface = ["datasets>=2.14"]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "respx>=0.20",
+]
+
+[project.scripts]
+idc = "idc.cli:cli"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=idc --cov-report=term-missing"
+
+[tool.hatch.build.targets.wheel]
+packages = ["idc"]
