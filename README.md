@@ -1,5 +1,9 @@
 # Image Dataset Creator (`idc`)
 
+![CI](https://github.com/yourname/image-dataset-creator/actions/workflows/test.yml/badge.svg)
+![Coverage](https://img.shields.io/badge/coverage-92%25-brightgreen)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+
 Build high-quality, legally-safe image datasets from commercial-friendly sources — in one command.
 
 ```bash
@@ -18,10 +22,14 @@ idc search "golden retriever" --count 500 --format yolo --output ./dogs
 - **CLIP semantic filtering** — score images against the query using a CLIP model (optional)
 - **Export formats** — raw folder, YOLO, COCO, HuggingFace datasets, CSV
 - **Train/val/test splits** — configurable fractions across all export formats
+- **Async downloads** — `asyncio`-based concurrent downloads with configurable concurrency
+- **Rate limiting** — per-source configurable delay between paginated API requests
 - **Resume downloads** — skips already-downloaded images automatically
+- **Streaming export** — memory-efficient record iteration via `Manifest.iter_all()`
 - **Download summary** — Rich table showing accepted, skipped, and failed counts after every run
 - **Dataset merging** — combine two datasets with cross-dataset deduplication
 - **Python API** — composable pipeline for scripting and CI/CD
+- **Typed library** — ships with `py.typed` for full type-checker support (PEP 561)
 
 ---
 
@@ -105,7 +113,7 @@ idc search QUERY [OPTIONS]
 | `--clip-threshold` | `0.2` | Cosine similarity threshold for CLIP filter |
 | `--no-resume` | off | Re-download even if already in manifest |
 | `--failure-log` | off | Save `download_failures.jsonl` on completion |
-| `--workers` | `8` | Parallel download threads |
+| `--workers` | `8` | Max concurrent async downloads |
 
 **Examples:**
 
@@ -411,12 +419,49 @@ builder.add_filter(CLIPFilter(threshold=0.25))
 
 Images whose cosine similarity to the search query falls below the threshold are rejected. The filter fails open — if CLIP is not installed or a file can't be scored, the image is accepted.
 
+### Streaming export
+
+All exporters accept any `Iterable[ImageRecord]`, so you can export directly from `iter_all()` without loading everything into memory:
+
+```python
+from idc.exporters import CSVExporter
+
+exporter = CSVExporter()
+exporter.export(builder.manifest.iter_all(), output_dir="./csv_export")
+```
+
+Split-based exporters (YOLO, COCO, HuggingFace) materialise records internally since they need a total count for proportional splitting.
+
 ### Save failure log
 
 ```python
 accepted = builder.download(records, save_failure_log=True)
 # Writes download_failures.jsonl to the dataset output directory
 ```
+
+### Rate limiting
+
+Avoid hitting API rate limits by adding a delay between paginated requests:
+
+```python
+from idc.sources import UnsplashSource, PexelsSource
+
+builder.add_source(UnsplashSource(api_key="...", request_delay=0.5))  # 0.5 s between pages
+builder.add_source(PexelsSource(api_key="...", request_delay=1.0))
+```
+
+### Per-page search progress
+
+Use the `on_page` callback to track pagination progress in custom scripts:
+
+```python
+from idc.sources import UnsplashSource
+
+source = UnsplashSource(api_key="...")
+records = source.search("dogs", count=200, on_page=lambda n: print(f"Page {n}"))
+```
+
+The CLI uses this internally to render a live tqdm progress bar per source.
 
 ### Open Images (no API key)
 
@@ -429,13 +474,20 @@ records = builder.search("Dog", count=50)
 
 The index is built from Open Images metadata CSVs on first use and cached locally at `~/.idc/openimages/`.
 
+Available splits: `validation` (~41K images, default), `test` (~125K), `train` (~1.7M).
+
 ### Accessing the manifest
 
 ```python
+# Load all records into memory at once
 for record in builder.manifest.get_all():
     print(record.attribution)
     print(record.local_path)
     print(record.license_type)
+
+# Stream records in batches (constant memory, good for large datasets)
+for record in builder.manifest.iter_all(batch_size=500):
+    print(record.source_id)
 ```
 
 ---
@@ -477,3 +529,27 @@ cd image-dataset-creator
 pip install -e ".[dev]"
 pytest
 ```
+
+### Running tests
+
+```bash
+# All tests with coverage report
+pytest
+
+# Fast (no coverage)
+pytest --no-cov
+
+# Single module
+pytest tests/test_sources.py
+```
+
+### Linting
+
+```bash
+pip install ruff
+ruff check idc/ tests/
+```
+
+### CI
+
+GitHub Actions runs the full test matrix (Python 3.10–3.13) on every push and pull request. See [`.github/workflows/test.yml`](.github/workflows/test.yml).

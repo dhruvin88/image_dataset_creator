@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
+from typing import Iterable, List
 
 from .base import BaseExporter
 from ..models import ImageRecord
@@ -23,7 +23,8 @@ class HuggingFaceExporter(BaseExporter):
         self.val_split = val_split
         self.test_split = test_split
 
-    def export(self, records: List[ImageRecord], output_dir: Path) -> None:
+    def export(self, records: Iterable[ImageRecord], output_dir: Path) -> None:
+        records = list(records)  # materialise — splits require random access
         try:
             import datasets as hf_datasets
         except ImportError as exc:

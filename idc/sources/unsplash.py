@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import List
+import time
+from typing import Callable, List, Optional
 
 import httpx
 
@@ -16,13 +17,15 @@ class UnsplashSource(ImageSource):
     _BASE = "https://api.unsplash.com"
     _PER_PAGE = 30  # Unsplash max per request
 
-    def __init__(self, api_key: str) -> None:
+    def __init__(self, api_key: str, request_delay: float = 0.0) -> None:
         self.api_key = api_key
         self._headers = {"Authorization": f"Client-ID {api_key}"}
+        self.request_delay = request_delay
 
-    def search(self, query: str, count: int, **kwargs) -> List[ImageRecord]:
+    def search(self, query: str, count: int, *, on_page: Optional[Callable[[int], None]] = None, **kwargs) -> List[ImageRecord]:
         records: List[ImageRecord] = []
         page = 1
+        page_count = 0
 
         with httpx.Client(timeout=30, headers=self._headers) as client:
             while len(records) < count:
@@ -42,14 +45,22 @@ class UnsplashSource(ImageSource):
                 if not results:
                     break
 
+                page_results = 0
                 for item in results:
                     records.append(self._parse(item, query))
+                    page_results += 1
                     if len(records) >= count:
                         break
+
+                page_count += page_results
+                if on_page is not None:
+                    on_page(page_results)
 
                 total_pages = data.get("total_pages", 1)
                 if page >= total_pages or len(results) < self._PER_PAGE:
                     break
+                if self.request_delay > 0:
+                    time.sleep(self.request_delay)
                 page += 1
 
         return records

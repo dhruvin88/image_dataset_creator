@@ -4,7 +4,7 @@ import json
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import Iterable, List
 
 from .base import BaseExporter
 from ..models import ImageRecord
@@ -34,7 +34,8 @@ class COCOExporter(BaseExporter):
         self.val_split = val_split
         self.test_split = test_split
 
-    def export(self, records: List[ImageRecord], output_dir: Path) -> None:
+    def export(self, records: Iterable[ImageRecord], output_dir: Path) -> None:
+        records = list(records)  # materialise — splits require random access
         output_dir.mkdir(parents=True, exist_ok=True)
         annotations_dir = output_dir / "annotations"
         annotations_dir.mkdir(exist_ok=True)

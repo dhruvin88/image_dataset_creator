@@ -1,13 +1,14 @@
 """Tests for retry_request and split_records utilities."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch, call
+import asyncio
+from unittest.mock import MagicMock, AsyncMock, patch, call
 import time
 
 import httpx
 import pytest
 
-from idc.utils import retry_request, split_records
+from idc.utils import retry_request, split_records, async_retry_request
 
 
 # ------------------------------------------------------------------ #
@@ -142,3 +143,151 @@ class TestRetryRequest:
         client.request.assert_called_once_with(
             "GET", "https://example.com", params={"q": "test"}
         )
+
+
+# ------------------------------------------------------------------ #
+# async_retry_request
+# ------------------------------------------------------------------ #
+
+
+class TestAsyncRetryRequest:
+    """Tests for the async variant of retry_request."""
+
+    def _ok(self, status=200):
+        resp = MagicMock()
+        resp.status_code = status
+        resp.raise_for_status = MagicMock()
+        resp.headers = {}
+        return resp
+
+    def _err(self, status):
+        resp = MagicMock()
+        resp.status_code = status
+        resp.headers = {}
+        resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "", request=MagicMock(), response=resp
+        )
+        return resp
+
+    def _make_async_client(self, responses):
+        """Build a mock httpx.AsyncClient whose request() returns values in sequence."""
+        client = MagicMock()
+        client.request = AsyncMock(side_effect=responses)
+        return client
+
+    def test_async_success_on_first_try(self):
+        client = self._make_async_client([self._ok()])
+        resp = asyncio.run(async_retry_request(client, "GET", "https://example.com"))
+        assert resp.status_code == 200
+        assert client.request.call_count == 1
+
+    def test_async_retries_on_429_with_retry_after(self):
+        rate_limited = MagicMock()
+        rate_limited.status_code = 429
+        rate_limited.headers = {"Retry-After": "1"}
+
+        slept = []
+
+        async def run():
+            with patch("asyncio.sleep", side_effect=lambda s: slept.append(s)):
+                client = self._make_async_client([rate_limited, self._ok()])
+                return await async_retry_request(
+                    client, "GET", "https://example.com", max_retries=3, backoff=0.0
+                )
+
+        resp = asyncio.run(run())
+        assert resp.status_code == 200
+        assert len(slept) == 1
+        assert slept[0] == 1  # Retry-After value
+
+    def test_async_retries_on_429_default_wait(self):
+        """When Retry-After header is absent, a computed backoff wait is used."""
+        rate_limited = MagicMock()
+        rate_limited.status_code = 429
+        rate_limited.headers = {}  # no Retry-After
+
+        slept = []
+
+        async def run():
+            with patch("asyncio.sleep", side_effect=lambda s: slept.append(s)):
+                client = self._make_async_client([rate_limited, self._ok()])
+                return await async_retry_request(
+                    client, "GET", "https://example.com", max_retries=3, backoff=1.0
+                )
+
+        resp = asyncio.run(run())
+        assert resp.status_code == 200
+        assert len(slept) == 1
+        assert slept[0] <= 300  # capped at 300 s
+
+    def test_async_retries_on_500(self):
+        slept = []
+        captured = []
+
+        async def run():
+            with patch("asyncio.sleep", side_effect=lambda s: slept.append(s)):
+                client = self._make_async_client(
+                    [self._err(500), self._err(500), self._ok()]
+                )
+                captured.append(client)
+                return await async_retry_request(
+                    client, "GET", "https://example.com", max_retries=3, backoff=0.0
+                )
+
+        resp = asyncio.run(run())
+        assert resp.status_code == 200
+        assert captured[0].request.call_count == 3
+
+    def test_async_raises_after_max_retries_exceeded(self):
+        async def run():
+            with patch("asyncio.sleep"):
+                client = self._make_async_client([self._err(500)] * 4)
+                return await async_retry_request(
+                    client, "GET", "https://example.com", max_retries=3, backoff=0.0
+                )
+
+        with pytest.raises(httpx.HTTPStatusError):
+            asyncio.run(run())
+
+    def test_async_retries_on_network_error(self):
+        async def run():
+            with patch("asyncio.sleep"):
+                client = self._make_async_client(
+                    [httpx.TimeoutException("timeout"), self._ok()]
+                )
+                return await async_retry_request(
+                    client, "GET", "https://example.com", max_retries=3, backoff=0.0
+                )
+
+        resp = asyncio.run(run())
+        assert resp.status_code == 200
+
+    def test_async_raises_network_error_after_max_retries(self):
+        async def run():
+            with patch("asyncio.sleep"):
+                client = self._make_async_client(
+                    [httpx.TimeoutException("timeout")] * 4
+                )
+                return await async_retry_request(
+                    client, "GET", "https://example.com", max_retries=3, backoff=0.0
+                )
+
+        with pytest.raises(httpx.TimeoutException):
+            asyncio.run(run())
+
+    def test_async_success_after_retries(self):
+        """Verifies the success path when a retry eventually succeeds."""
+        slept = []
+
+        async def run():
+            with patch("asyncio.sleep", side_effect=lambda s: slept.append(s)):
+                client = self._make_async_client(
+                    [self._err(503), self._err(503), self._ok(200)]
+                )
+                return await async_retry_request(
+                    client, "GET", "https://example.com", max_retries=3, backoff=0.0
+                )
+
+        resp = asyncio.run(run())
+        assert resp.status_code == 200
+        assert len(slept) == 2  # slept twice before succeeding

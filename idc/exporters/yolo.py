@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 import yaml
 
@@ -32,7 +32,8 @@ class YOLOExporter(BaseExporter):
         self.test_split = test_split
         self.class_names = class_names or ["object"]
 
-    def export(self, records: List[ImageRecord], output_dir: Path) -> None:
+    def export(self, records: Iterable[ImageRecord], output_dir: Path) -> None:
+        records = list(records)  # materialise — splits require random access
         output_dir.mkdir(parents=True, exist_ok=True)
 
         train, val, test = split_records(records, self.val_split, self.test_split)

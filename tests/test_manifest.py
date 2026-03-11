@@ -145,3 +145,32 @@ class TestManifest:
     def test_get_by_source_id_not_found(self, tmp_path):
         db = Manifest(tmp_path / "manifest.db")
         assert db.get_by_source_id("unsplash", "nope") is None
+
+    def test_iter_all_empty(self, tmp_path):
+        db = Manifest(tmp_path / "manifest.db")
+        assert list(db.iter_all()) == []
+
+    def test_iter_all_yields_all_records(self, tmp_path):
+        db = Manifest(tmp_path / "manifest.db")
+        records = [_make_record(source_id=f"r{i}") for i in range(5)]
+        for r in records:
+            db.add(r)
+        result = list(db.iter_all())
+        assert len(result) == 5
+        assert {r.source_id for r in result} == {f"r{i}" for i in range(5)}
+
+    def test_iter_all_small_batch_size(self, tmp_path):
+        """batch_size smaller than record count forces multiple LIMIT/OFFSET queries."""
+        db = Manifest(tmp_path / "manifest.db")
+        for i in range(7):
+            db.add(_make_record(source_id=f"b{i}"))
+        result = list(db.iter_all(batch_size=3))
+        assert len(result) == 7
+
+    def test_iter_all_exact_batch_boundary(self, tmp_path):
+        """Exactly batch_size records causes one extra (empty) query."""
+        db = Manifest(tmp_path / "manifest.db")
+        for i in range(4):
+            db.add(_make_record(source_id=f"e{i}"))
+        result = list(db.iter_all(batch_size=4))
+        assert len(result) == 4

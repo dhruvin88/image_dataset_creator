@@ -262,6 +262,39 @@ class OpenImagesSource(ImageSource):
             query=query,
         )
 
+    async def adownload(self, record: ImageRecord, output_dir: Path) -> Path:
+        """Async download with fallback to thumbnail if original URL fails."""
+        import httpx as _httpx
+
+        from ..utils import async_retry_request
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        ext = self._guess_extension(record.download_url)
+        local_path = output_dir / f"openimages_{record.source_id}{ext}"
+
+        if local_path.exists():
+            return local_path
+
+        async with _httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            try:
+                resp = await async_retry_request(client, "GET", record.download_url, max_retries=2)
+                local_path.write_bytes(resp.content)
+            except Exception:
+                if self._db:
+                    row = self._db.execute(
+                        "SELECT thumbnail_url FROM images WHERE image_id = ?",
+                        (record.source_id,),
+                    ).fetchone()
+                    if row and row[0]:
+                        resp = await async_retry_request(client, "GET", row[0], max_retries=2)
+                        local_path.write_bytes(resp.content)
+                    else:
+                        raise
+                else:
+                    raise
+
+        return local_path
+
     def download(self, record: ImageRecord, output_dir: Path) -> Path:
         """Download with fallback to thumbnail if original URL fails."""
         output_dir.mkdir(parents=True, exist_ok=True)

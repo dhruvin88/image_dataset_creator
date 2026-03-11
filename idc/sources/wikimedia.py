@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-from typing import List, Optional, Tuple
+import time
+from typing import Callable, List, Optional, Tuple
 
 import httpx
 
@@ -27,12 +28,13 @@ class WikimediaSource(ImageSource):
     _API = "https://commons.wikimedia.org/w/api.php"
     _SEARCH_LIMIT = 50
 
-    def __init__(self, include_cc_by_sa: bool = False) -> None:
+    def __init__(self, include_cc_by_sa: bool = False, request_delay: float = 0.0) -> None:
         self._allowed = set(_DEFAULT_ALLOWED)
         if include_cc_by_sa:
             self._allowed.add("cc-by-sa")
+        self.request_delay = request_delay
 
-    def search(self, query: str, count: int, **kwargs) -> List[ImageRecord]:
+    def search(self, query: str, count: int, *, on_page: Optional[Callable[[int], None]] = None, **kwargs) -> List[ImageRecord]:
         records: List[ImageRecord] = []
         offset = 0
 
@@ -46,16 +48,23 @@ class WikimediaSource(ImageSource):
                 titles = "|".join(r["title"] for r in search_results)
                 pages = self._get_image_info(client, titles)
 
+                page_results = 0
                 for page in pages.values():
                     record = self._parse(page, query)
                     if record is not None:
                         records.append(record)
+                        page_results += 1
                     if len(records) >= count:
                         break
+
+                if on_page is not None:
+                    on_page(page_results)
 
                 offset += len(search_results)
                 if len(search_results) < self._SEARCH_LIMIT:
                     break
+                if self.request_delay > 0:
+                    time.sleep(self.request_delay)
 
         return records
 

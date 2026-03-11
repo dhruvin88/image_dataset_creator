@@ -1,9 +1,11 @@
 """Tests for image source adapters (mocked HTTP)."""
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from idc.sources.pixabay import PixabaySource
@@ -395,3 +397,78 @@ class TestBaseSourceDownload:
         # Should not have called client.get since file already exists
         mock_client_cls.return_value.__enter__.return_value.request.assert_not_called()
         assert local_path == existing_file
+
+
+# ------------------------------------------------------------------ #
+# Base source async download (adownload)
+# ------------------------------------------------------------------ #
+
+
+class TestBaseSourceADownload:
+    """Tests for the default adownload() method on ImageSource (via UnsplashSource)."""
+
+    def _make_record(self, source_id="adltest"):
+        from idc.models import ImageRecord
+        return ImageRecord(
+            source="unsplash",
+            source_id=source_id,
+            url=f"https://unsplash.com/photos/{source_id}",
+            download_url=f"https://images.unsplash.com/photo-{source_id}",
+            license_type="unsplash",
+            license_url="https://unsplash.com/license",
+            attribution="Photo by Test on Unsplash",
+            photographer="Test",
+            photographer_url="",
+            width=800,
+            height=600,
+            query="dogs",
+        )
+
+    def test_adownload_saves_file(self, tmp_path):
+        source = UnsplashSource(api_key="key")
+        record = self._make_record()
+        fake_bytes = b"\xff\xd8\xff" + b"\x00" * 500
+
+        ok_resp = MagicMock()
+        ok_resp.status_code = 200
+        ok_resp.headers = {}
+        ok_resp.raise_for_status = MagicMock()
+        ok_resp.content = fake_bytes
+
+        async def _fake_request(*args, **kwargs):
+            return ok_resp
+
+        with patch.object(httpx.AsyncClient, "request", new=_fake_request):
+            local_path = asyncio.run(source.adownload(record, tmp_path / "async_out"))
+
+        assert local_path.exists()
+        assert local_path.read_bytes() == fake_bytes
+
+    def test_adownload_skips_existing_file(self, tmp_path):
+        source = UnsplashSource(api_key="key")
+        record = self._make_record(source_id="existing_async")
+
+        out_dir = tmp_path / "async_out"
+        out_dir.mkdir()
+        existing = out_dir / "unsplash_existing_async.jpg"
+        existing.write_bytes(b"cached content")
+
+        async def _fake_request(*args, **kwargs):
+            raise AssertionError("should not be called when file exists")
+
+        with patch.object(httpx.AsyncClient, "request", new=_fake_request):
+            local_path = asyncio.run(source.adownload(record, out_dir))
+
+        assert local_path == existing
+        assert local_path.read_bytes() == b"cached content"
+
+    def test_adownload_raises_on_network_error(self, tmp_path):
+        source = UnsplashSource(api_key="key")
+        record = self._make_record()
+
+        async def _fake_request(*args, **kwargs):
+            raise httpx.ConnectError("simulated network error")
+
+        with patch.object(httpx.AsyncClient, "request", new=_fake_request):
+            with pytest.raises(httpx.ConnectError):
+                asyncio.run(source.adownload(record, tmp_path / "err_out"))

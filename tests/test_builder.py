@@ -41,6 +41,9 @@ class FakeSource(ImageSource):
             path.write_bytes(make_jpeg_bytes(400, 300))
         return path
 
+    async def adownload(self, record: ImageRecord, output_dir: Path) -> Path:
+        return self.download(record, output_dir)
+
 
 class BlurryFakeSource(FakeSource):
     def download(self, record: ImageRecord, output_dir: Path) -> Path:
@@ -49,6 +52,9 @@ class BlurryFakeSource(FakeSource):
         if not path.exists():
             path.write_bytes(make_blurry_jpeg_bytes())
         return path
+
+    async def adownload(self, record: ImageRecord, output_dir: Path) -> Path:
+        return self.download(record, output_dir)
 
 
 def _make_fake_record(source_id: str, query: str = "dogs") -> ImageRecord:
@@ -175,21 +181,21 @@ class TestDatasetBuilder:
 
         # Second download — same records, should be skipped via manifest
         source2 = FakeSource(records)
-        download_calls = []
-        original_download = source2.download
+        adownload_calls = []
+        original_adownload = source2.adownload
 
-        def tracked_download(record, output_dir):
-            download_calls.append(record.source_id)
-            return original_download(record, output_dir)
+        async def tracked_adownload(record, output_dir):
+            adownload_calls.append(record.source_id)
+            return await original_adownload(record, output_dir)
 
-        source2.download = tracked_download
+        source2.adownload = tracked_adownload
         builder._sources = [source2]
         accepted2 = builder.download(records, skip_existing=True)
 
         # Should still return the existing records
         assert len(accepted2) == 2
         # Should not have re-downloaded (manifest lookup returned existing)
-        assert len(download_calls) == 0
+        assert len(adownload_calls) == 0
 
     def test_no_resume_redownloads(self, tmp_path):
         """skip_existing=False should re-download even if already in manifest."""
@@ -198,18 +204,18 @@ class TestDatasetBuilder:
         builder.add_source(FakeSource(records))
         builder.download(records)
 
-        download_calls = []
+        adownload_calls = []
         src = FakeSource(records)
-        original = src.download
+        original = src.adownload
 
-        def tracked(record, output_dir):
-            download_calls.append(record.source_id)
-            return original(record, output_dir)
+        async def tracked(record, output_dir):
+            adownload_calls.append(record.source_id)
+            return await original(record, output_dir)
 
-        src.download = tracked
+        src.adownload = tracked
         builder._sources = [src]
         builder.download(records, skip_existing=False)
-        assert len(download_calls) == 1  # Was re-downloaded
+        assert len(adownload_calls) == 1  # Was re-downloaded
 
     def test_download_summary_tracks_accepted(self, tmp_path):
         records = [_make_fake_record(f"s{i}") for i in range(3)]
@@ -232,6 +238,9 @@ class TestDatasetBuilder:
             def download(self, record, output_dir):
                 raise RuntimeError("simulated network error")
 
+            async def adownload(self, record, output_dir):
+                raise RuntimeError("simulated network error")
+
         builder.add_source(ErrorSource(records))
         builder.download(records)
 
@@ -243,6 +252,9 @@ class TestDatasetBuilder:
         class ErrorSource(FakeSource):
             name = "fake"
             def download(self, record, output_dir):
+                raise RuntimeError("network error")
+
+            async def adownload(self, record, output_dir):
                 raise RuntimeError("network error")
 
         builder = DatasetBuilder(tmp_path)

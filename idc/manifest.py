@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import List, Optional
+from typing import Generator, List, Optional
 
 from .models import ImageRecord
 
@@ -60,6 +60,27 @@ class Manifest:
         with sqlite3.connect(self.db_path) as conn:
             rows = conn.execute("SELECT data FROM images").fetchall()
         return [ImageRecord.from_dict(json.loads(row[0])) for row in rows]
+
+    def iter_all(self, batch_size: int = 500) -> Generator[ImageRecord, None, None]:
+        """
+        Yield ImageRecords one at a time without loading the full dataset into memory.
+
+        Uses batched LIMIT/OFFSET queries so memory stays constant regardless of
+        dataset size.
+        """
+        offset = 0
+        while True:
+            with sqlite3.connect(self.db_path) as conn:
+                rows = conn.execute(
+                    "SELECT data FROM images LIMIT ? OFFSET ?", (batch_size, offset)
+                ).fetchall()
+            if not rows:
+                break
+            for row in rows:
+                yield ImageRecord.from_dict(json.loads(row[0]))
+            if len(rows) < batch_size:
+                break
+            offset += batch_size
 
     def get_phashes(self) -> List[str]:
         with sqlite3.connect(self.db_path) as conn:

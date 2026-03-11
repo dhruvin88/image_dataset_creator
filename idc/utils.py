@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import List, Tuple, TypeVar
 
@@ -49,6 +50,45 @@ def retry_request(
         return resp
 
     # Should not be reached, but satisfies type checker
+    resp.raise_for_status()  # type: ignore[possibly-undefined]
+    return resp  # type: ignore[possibly-undefined]
+
+
+async def async_retry_request(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    max_retries: int = 3,
+    backoff: float = 1.0,
+    **kwargs,
+) -> httpx.Response:
+    """
+    Async version of retry_request for use with httpx.AsyncClient.
+
+    Retries on 429 (rate-limit) and 5xx (server error) with exponential back-off.
+    On 429 the Retry-After header is respected (capped at 300 s).
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            resp = await client.request(method, url, **kwargs)
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as exc:
+            if attempt < max_retries:
+                await asyncio.sleep(backoff * (2**attempt))
+                continue
+            raise
+
+        if resp.status_code == 429 and attempt < max_retries:
+            wait = int(resp.headers.get("Retry-After", backoff * 60 * (2**attempt)))
+            await asyncio.sleep(min(wait, 300))
+            continue
+
+        if resp.status_code >= 500 and attempt < max_retries:
+            await asyncio.sleep(backoff * (2**attempt))
+            continue
+
+        resp.raise_for_status()
+        return resp
+
     resp.raise_for_status()  # type: ignore[possibly-undefined]
     return resp  # type: ignore[possibly-undefined]
 
